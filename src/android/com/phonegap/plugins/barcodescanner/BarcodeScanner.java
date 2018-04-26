@@ -1,32 +1,35 @@
 /**
  * PhoneGap is available under *either* the terms of the modified BSD license *or* the
  * MIT License (2008). See http://opensource.org/licenses/alphabetical for full text.
- *
+ * <p>
  * Copyright (c) Matt Kane 2010
  * Copyright (c) 2011, IBM Corporation
  * Copyright (c) 2013, Maciej Nux Jaros
  */
 package com.phonegap.plugins.barcodescanner;
 
+import android.Manifest;
+import android.app.Activity;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.util.Log;
+
+import com.google.zxing.client.android.CaptureActivity;
+import com.google.zxing.client.android.Intents;
+import com.google.zxing.client.android.encode.EncodeActivity;
+
+import org.apache.cordova.CallbackContext;
+import org.apache.cordova.CordovaPlugin;
+import org.apache.cordova.PermissionHelper;
+import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import android.Manifest;
-import android.app.Activity;
-import android.content.Intent;
-import android.os.Bundle;
-import android.util.Log;
-import android.content.pm.PackageManager;
-
-import org.apache.cordova.CordovaPlugin;
-import org.apache.cordova.CallbackContext;
-import org.apache.cordova.PluginResult;
-import org.apache.cordova.PermissionHelper;
-
-import com.google.zxing.client.android.CaptureActivity;
-import com.google.zxing.client.android.encode.EncodeActivity;
-import com.google.zxing.client.android.Intents;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * This calls out to the ZXing barcode reader and returns the result.
@@ -53,6 +56,9 @@ public class BarcodeScanner extends CordovaPlugin {
     private static final String DISABLE_BEEP = "disableSuccessBeep";
     private static final String FORMATS = "formats";
     private static final String PROMPT = "prompt";
+    private static final String REQUIRED_CODES = "requiredCodes";
+    private static final String REQUIRED_CODES_TEXT = "requiredCodesText";
+    private static final String MULTI = "multi";
     private static final String TEXT_TYPE = "TEXT_TYPE";
     private static final String EMAIL_TYPE = "EMAIL_TYPE";
     private static final String PHONE_TYPE = "PHONE_TYPE";
@@ -60,10 +66,14 @@ public class BarcodeScanner extends CordovaPlugin {
 
     private static final String LOG_TAG = "BarcodeScanner";
 
-    private String [] permissions = { Manifest.permission.CAMERA };
+    private String[] permissions = {Manifest.permission.CAMERA};
 
     private JSONArray requestArgs;
     private CallbackContext callbackContext;
+    private JSONArray results;
+    private Set<String> requiredCodes = new HashSet<>();
+    private boolean isMulti;
+    private String requiredCodesText;
 
     /**
      * Constructor.
@@ -73,27 +83,26 @@ public class BarcodeScanner extends CordovaPlugin {
 
     /**
      * Executes the request.
-     *
+     * <p>
      * This method is called from the WebView thread. To do a non-trivial amount of work, use:
-     *     cordova.getThreadPool().execute(runnable);
-     *
+     * cordova.getThreadPool().execute(runnable);
+     * <p>
      * To run on the UI thread, use:
-     *     cordova.getActivity().runOnUiThread(runnable);
+     * cordova.getActivity().runOnUiThread(runnable);
      *
      * @param action          The action to execute.
      * @param args            The exec() arguments.
      * @param callbackContext The callback context used when calling back into JavaScript.
-     * @return                Whether the action was valid.
-     *
+     * @return Whether the action was valid.
      * @sa https://github.com/apache/cordova-android/blob/master/framework/src/org/apache/cordova/CordovaPlugin.java
      */
     @Override
     public boolean execute(String action, JSONArray args, CallbackContext callbackContext) {
         this.callbackContext = callbackContext;
         this.requestArgs = args;
-
+        this.results = new JSONArray();
+        JSONObject obj = args.optJSONObject(0);
         if (action.equals(ENCODE)) {
-            JSONObject obj = args.optJSONObject(0);
             if (obj != null) {
                 String type = obj.optString(TYPE);
                 String data = obj.optString(DATA);
@@ -114,12 +123,20 @@ public class BarcodeScanner extends CordovaPlugin {
                 return true;
             }
         } else if (action.equals(SCAN)) {
+            if (obj != null) {
+                // get scan params not related to intent
+                String requiredCodesString = obj.optString(REQUIRED_CODES);
+                String[] requiredCodesArray = (requiredCodesString != null && !requiredCodesString.isEmpty()) ? requiredCodesString.split(",") : new String[]{};
+                Collections.addAll(requiredCodes, requiredCodesArray);
+                requiredCodesText = obj.optString(REQUIRED_CODES_TEXT);
+                isMulti = obj.optBoolean(MULTI);
+            }
 
             //android permission auto add
-            if(!hasPermisssion()) {
-              requestPermissions(0);
+            if (!hasPermisssion()) {
+                requestPermissions(0);
             } else {
-              scan(args);
+                scan(args);
             }
         } else {
             return false;
@@ -144,25 +161,25 @@ public class BarcodeScanner extends CordovaPlugin {
                 // add config as intent extras
                 if (args.length() > 0) {
 
-                    JSONObject obj;
                     JSONArray names;
                     String key;
                     Object value;
 
                     for (int i = 0; i < args.length(); i++) {
 
+                        JSONObject argsObj;
                         try {
-                            obj = args.getJSONObject(i);
+                            argsObj = args.getJSONObject(i);
                         } catch (JSONException e) {
                             Log.i("CordovaLog", e.getLocalizedMessage());
                             continue;
                         }
 
-                        names = obj.names();
+                        names = argsObj.names();
                         for (int j = 0; j < names.length(); j++) {
                             try {
                                 key = names.getString(j);
-                                value = obj.get(key);
+                                value = argsObj.get(key);
 
                                 if (value instanceof Integer) {
                                     intentScan.putExtra(key, (Integer) value);
@@ -175,24 +192,24 @@ public class BarcodeScanner extends CordovaPlugin {
                             }
                         }
 
-                        intentScan.putExtra(Intents.Scan.CAMERA_ID, obj.optBoolean(PREFER_FRONTCAMERA, false) ? 1 : 0);
-                        intentScan.putExtra(Intents.Scan.SHOW_FLIP_CAMERA_BUTTON, obj.optBoolean(SHOW_FLIP_CAMERA_BUTTON, false));
-                        intentScan.putExtra(Intents.Scan.SHOW_TORCH_BUTTON, obj.optBoolean(SHOW_TORCH_BUTTON, false));
-                        intentScan.putExtra(Intents.Scan.TORCH_ON, obj.optBoolean(TORCH_ON, false));
-                        intentScan.putExtra(Intents.Scan.SAVE_HISTORY, obj.optBoolean(SAVE_HISTORY, false));
-                        boolean beep = obj.optBoolean(DISABLE_BEEP, false);
+                        intentScan.putExtra(Intents.Scan.CAMERA_ID, argsObj.optBoolean(PREFER_FRONTCAMERA, false) ? 1 : 0);
+                        intentScan.putExtra(Intents.Scan.SHOW_FLIP_CAMERA_BUTTON, argsObj.optBoolean(SHOW_FLIP_CAMERA_BUTTON, false));
+                        intentScan.putExtra(Intents.Scan.SHOW_TORCH_BUTTON, argsObj.optBoolean(SHOW_TORCH_BUTTON, false));
+                        intentScan.putExtra(Intents.Scan.TORCH_ON, argsObj.optBoolean(TORCH_ON, false));
+                        intentScan.putExtra(Intents.Scan.SAVE_HISTORY, argsObj.optBoolean(SAVE_HISTORY, false));
+                        boolean beep = argsObj.optBoolean(DISABLE_BEEP, false);
                         intentScan.putExtra(Intents.Scan.BEEP_ON_SCAN, !beep);
-                        if (obj.has(RESULTDISPLAY_DURATION)) {
-                            intentScan.putExtra(Intents.Scan.RESULT_DISPLAY_DURATION_MS, "" + obj.optLong(RESULTDISPLAY_DURATION));
+                        if (argsObj.has(RESULTDISPLAY_DURATION)) {
+                            intentScan.putExtra(Intents.Scan.RESULT_DISPLAY_DURATION_MS, "" + argsObj.optLong(RESULTDISPLAY_DURATION));
                         }
-                        if (obj.has(FORMATS)) {
-                            intentScan.putExtra(Intents.Scan.FORMATS, obj.optString(FORMATS));
+                        if (argsObj.has(FORMATS)) {
+                            intentScan.putExtra(Intents.Scan.FORMATS, argsObj.optString(FORMATS));
                         }
-                        if (obj.has(PROMPT)) {
-                            intentScan.putExtra(Intents.Scan.PROMPT_MESSAGE, obj.optString(PROMPT));
+                        if (argsObj.has(PROMPT)) {
+                            intentScan.putExtra(Intents.Scan.PROMPT_MESSAGE, argsObj.optString(PROMPT));
                         }
-                        if (obj.has(ORIENTATION)) {
-                            intentScan.putExtra(Intents.Scan.ORIENTATION_LOCK, obj.optString(ORIENTATION));
+                        if (argsObj.has(ORIENTATION)) {
+                            intentScan.putExtra(Intents.Scan.ORIENTATION_LOCK, argsObj.optString(ORIENTATION));
                         }
                     }
 
@@ -210,12 +227,13 @@ public class BarcodeScanner extends CordovaPlugin {
      * Called when the barcode scanner intent completes.
      *
      * @param requestCode The request code originally supplied to startActivityForResult(),
-     *                       allowing you to identify who this result came from.
+     *                    allowing you to identify who this result came from.
      * @param resultCode  The integer result code returned by the child activity through its setResult().
      * @param intent      An Intent, which can return result data to the caller (various data can be attached to Intent "extras").
      */
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent intent) {
+        boolean hasRequiredCodes = requiredCodes.size() > 0;
         if (requestCode == REQUEST_CODE && this.callbackContext != null) {
             if (resultCode == Activity.RESULT_OK) {
                 JSONObject obj = new JSONObject();
@@ -227,7 +245,16 @@ public class BarcodeScanner extends CordovaPlugin {
                     Log.d(LOG_TAG, "This should never happen");
                 }
                 //this.success(new PluginResult(PluginResult.Status.OK, obj), this.callback);
-                this.callbackContext.success(obj);
+                if (hasRequiredCodes || isMulti) {
+                    results.put(obj);
+                    if (hasRequiredCodes) {
+                        this.updatePromptMessageForRequiredCodes();
+                    }
+                    // relaunch scan
+                    scan(this.requestArgs);
+                } else {
+                    this.callbackContext.success(obj);
+                }
             } else if (resultCode == Activity.RESULT_CANCELED) {
                 JSONObject obj = new JSONObject();
                 try {
@@ -238,7 +265,11 @@ public class BarcodeScanner extends CordovaPlugin {
                     Log.d(LOG_TAG, "This should never happen");
                 }
                 //this.success(new PluginResult(PluginResult.Status.OK, obj), this.callback);
-                this.callbackContext.success(obj);
+                if (hasRequiredCodes || isMulti) {
+                    this.callbackContext.success(results);
+                } else {
+                    this.callbackContext.success(obj);
+                }
             } else {
                 //this.error(new PluginResult(PluginResult.Status.ERROR), this.callback);
                 this.callbackContext.error("Unexpected error");
@@ -266,16 +297,14 @@ public class BarcodeScanner extends CordovaPlugin {
     /**
      * check application's permissions
      */
-   public boolean hasPermisssion() {
-       for(String p : permissions)
-       {
-           if(!PermissionHelper.hasPermission(this, p))
-           {
-               return false;
-           }
-       }
-       return true;
-   }
+    public boolean hasPermisssion() {
+        for (String p : permissions) {
+            if (!PermissionHelper.hasPermission(this, p)) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /**
      * We override this so that we can access the permissions variable, which no longer exists in
@@ -283,38 +312,35 @@ public class BarcodeScanner extends CordovaPlugin {
      *
      * @param requestCode The code to get request action
      */
-   public void requestPermissions(int requestCode)
-   {
-       PermissionHelper.requestPermissions(this, requestCode, permissions);
-   }
+    public void requestPermissions(int requestCode) {
+        PermissionHelper.requestPermissions(this, requestCode, permissions);
+    }
 
-   /**
-   * processes the result of permission request
-   *
-   * @param requestCode The code to get request action
-   * @param permissions The collection of permissions
-   * @param grantResults The result of grant
-   */
-  public void onRequestPermissionResult(int requestCode, String[] permissions,
-                                         int[] grantResults) throws JSONException
-   {
-       PluginResult result;
-       for (int r : grantResults) {
-           if (r == PackageManager.PERMISSION_DENIED) {
-               Log.d(LOG_TAG, "Permission Denied!");
-               result = new PluginResult(PluginResult.Status.ILLEGAL_ACCESS_EXCEPTION);
-               this.callbackContext.sendPluginResult(result);
-               return;
-           }
-       }
+    /**
+     * processes the result of permission request
+     *
+     * @param requestCode  The code to get request action
+     * @param permissions  The collection of permissions
+     * @param grantResults The result of grant
+     */
+    public void onRequestPermissionResult(int requestCode, String[] permissions,
+                                          int[] grantResults) throws JSONException {
+        PluginResult result;
+        for (int r : grantResults) {
+            if (r == PackageManager.PERMISSION_DENIED) {
+                Log.d(LOG_TAG, "Permission Denied!");
+                result = new PluginResult(PluginResult.Status.ILLEGAL_ACCESS_EXCEPTION);
+                this.callbackContext.sendPluginResult(result);
+                return;
+            }
+        }
 
-       switch(requestCode)
-       {
-           case 0:
-               scan(this.requestArgs);
-               break;
-       }
-   }
+        switch (requestCode) {
+            case 0:
+                scan(this.requestArgs);
+                break;
+        }
+    }
 
     /**
      * This plugin launches an external Activity when the camera is opened, so we
@@ -323,6 +349,29 @@ public class BarcodeScanner extends CordovaPlugin {
      */
     public void onRestoreStateForActivityResult(Bundle state, CallbackContext callbackContext) {
         this.callbackContext = callbackContext;
+    }
+
+    private void updatePromptMessageForRequiredCodes() {
+        Set<String> requiredCodesFound = new HashSet<>();
+        for (int i = 0; i < results.length(); i++) {
+            JSONObject loopObj = results.optJSONObject(i);
+            if (loopObj != null) {
+                String text = loopObj.optString(TEXT);
+                if (requiredCodes.contains(text)) {
+                    requiredCodesFound.add(text);
+                }
+            }
+        }
+        StringBuilder prompt = new StringBuilder();
+        prompt.append(requiredCodesText);
+        prompt.append(requiredCodes.size() - requiredCodesFound.size());
+        JSONObject args = this.requestArgs.optJSONObject(0);
+        args.remove(PROMPT);
+        try {
+            args.put(PROMPT, prompt.toString());
+        } catch (JSONException e) {
+            Log.d(LOG_TAG, "This should never happen");
+        }
     }
 
 }
