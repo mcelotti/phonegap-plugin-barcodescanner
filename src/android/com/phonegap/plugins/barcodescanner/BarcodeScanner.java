@@ -71,7 +71,7 @@ public class BarcodeScanner extends CordovaPlugin {
     private JSONArray requestArgs;
     private CallbackContext callbackContext;
     private JSONArray results;
-    private Set<String> requiredCodes = new HashSet<>();
+    private Set<String> requiredCodes;
     private boolean isMulti;
     private String requiredCodesText;
 
@@ -127,6 +127,7 @@ public class BarcodeScanner extends CordovaPlugin {
                 // get scan params not related to intent
                 String requiredCodesString = obj.optString(REQUIRED_CODES);
                 String[] requiredCodesArray = (requiredCodesString != null && !requiredCodesString.isEmpty()) ? requiredCodesString.split(",") : new String[]{};
+                requiredCodes = new HashSet<>();
                 Collections.addAll(requiredCodes, requiredCodesArray);
                 requiredCodesText = obj.optString(REQUIRED_CODES_TEXT);
                 isMulti = obj.optBoolean(MULTI);
